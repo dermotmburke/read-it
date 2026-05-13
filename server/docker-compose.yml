@@ -1,0 +1,14 @@
+services:
+  tts:
+    build: .
+    ports:
+      - "7860:7860"
+    volumes:
+      # Persist the downloaded Kokoro model weights across container restarts
+      - hf-cache:/cache/huggingface
+    restart: unless-stopped
+    environment:
+      - PORT=7860
+
+volumes:
+  hf-cache:

@@ -1,0 +1,4 @@
+#!/bin/zsh
+# Wrapper so you can run: ./speak myfile.txt
+DIR="$(cd "$(dirname "$0")" && pwd)"
+exec "$DIR/.venv/bin/python3" "$DIR/speak.py" "$@"

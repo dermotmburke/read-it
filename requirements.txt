@@ -1,0 +1,20 @@
+en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl#sha256=1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85
+espeakng-loader==0.2.4
+huggingface_hub==1.14.0
+miniaudio==1.71
+misaki==0.7.4
+mlx-audio==0.4.3
+mlx-lm==0.31.3
+mlx-metal==0.31.2
+mlx==0.31.2
+num2words==0.5.14
+numpy==2.4.4
+phonemizer-fork==3.3.2
+safetensors==0.7.0
+scipy==1.17.1
+sounddevice==0.5.5
+spacy-legacy==3.0.12
+spacy-loggers==1.0.5
+spacy==3.8.14
+tokenizers==0.22.2
+transformers==5.8.1
