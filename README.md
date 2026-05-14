@@ -1,45 +1,51 @@
 # read-it
 
-Local text-to-speech using the [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) model. Two flavours:
-
-| | Mac (MLX) | Server (PyTorch) |
-|---|---|---|
-| **Target** | Apple Silicon | Linux / Docker |
-| **Backend** | MLX | PyTorch CPU |
-| **Speed** | ~15–20× real-time | ~2–4× real-time |
-| **Entry point** | `app.py` | `server/app.py` |
-
-Both expose the same Gradio UI at `http://localhost:7860`.
+Local text-to-speech on Apple Silicon, running entirely on-device via MLX. Gradio UI at `http://localhost:7860`, persistent via a macOS LaunchAgent.
 
 ---
 
-## Mac — MLX (Apple Silicon)
+## Models
 
-### Requirements
+| Model | Style | Size | Speed |
+|---|---|---|---|
+| **Kokoro-82M** | Natural, non-autoregressive | 82M params | ~20× real-time |
+| **Orpheus-3B** | Expressive, emotion tags | 3B params (4-bit) | ~3× real-time |
+
+Kokoro loads at startup. Orpheus loads lazily on first use (~1.7 GB download).
+
+Adding a new model is one `ModelSpec(...)` block in `app.py` — see [Architecture](#architecture).
+
+---
+
+## Requirements
 
 - macOS, Apple Silicon (M1 or later)
 - Python 3.13 via Homebrew
-- `espeak-ng` via Homebrew
+- `espeak-ng` and `ffmpeg` via Homebrew
 
-### Setup
+---
+
+## Setup
 
 ```bash
-# Install system dependency
-brew install espeak-ng
+brew install espeak-ng ffmpeg
 
-# Create venv and install packages
 python3.13 -m venv .venv
 source .venv/bin/activate
 
 pip install spacy --prefer-binary
 pip install espeakng-loader num2words phonemizer-fork
 pip install misaki --no-deps
-pip install mlx-audio gradio
+pip install mlx-audio gradio pydub scipy
+pip install pytest playwright
+playwright install chromium
 ```
 
-> **Note:** `misaki[en]`'s full install fails on Python 3.13 because `spacy-curated-transformers` pulls a version of `blis` that doesn't compile against the new C API. The manual install steps above work around this.
+> **Note:** `misaki[en]`'s full install fails on Python 3.13 because `spacy-curated-transformers` pulls a `blis` version that doesn't compile against the new C API. The manual steps above work around it.
 
-### Run
+---
+
+## Run
 
 ```bash
 .venv/bin/python3 app.py
@@ -54,13 +60,19 @@ launchctl load ~/Library/LaunchAgents/com.dermotburke.tts.plist
 ```
 
 ```bash
-# Manage
-launchctl unload ~/Library/LaunchAgents/com.dermotburke.tts.plist  # stop
-launchctl load   ~/Library/LaunchAgents/com.dermotburke.tts.plist  # start
-tail -f ~/Library/Logs/tts.log                                      # logs
+# Restart after changes
+launchctl kickstart -k gui/$(id -u)/com.dermotburke.tts
+
+# Logs
+tail -f ~/Library/Logs/tts.log
+
+# Status
+launchctl list com.dermotburke.tts
 ```
 
-### CLI (no UI)
+---
+
+## CLI
 
 ```bash
 ./speak myfile.txt
@@ -70,47 +82,66 @@ tail -f ~/Library/Logs/tts.log                                      # logs
 
 ---
 
-## Server — Docker (Linux / homelab)
+## Testing
 
-Tested on AMD Ryzen / x86-64. Uses the PyTorch CPU backend — no CUDA or ROCm required.
-
-### Requirements
-
-- Docker + Docker Compose
-
-### Run
+Tests run a headless Chromium browser against the live service and verify audio generation end-to-end.
 
 ```bash
-cd server/
-docker compose up -d --build
-# → http://<host-ip>:7860
+# Service must be running on localhost:7860
+make test
+
+# Wire up pre-push hook (run once)
+make install-hooks
 ```
 
-Model weights (~330 MB) are downloaded on first start and cached in a Docker volume so rebuilds are instant.
+The pre-push hook blocks pushes unless all 8 tests pass.
 
-### Configuration
+---
 
-| Env var | Default | Description |
-|---|---|---|
-| `PORT` | `7860` | Port the server listens on |
-| `HF_HOME` | `/cache/huggingface` | Model cache location (mount a volume here) |
+## Architecture
+
+**MLX requires all GPU ops on the main thread.** Gradio handlers run in a thread pool, so the design flips this around: Gradio runs in a background thread, the main thread loops over inference tasks from a `queue.Queue`.
+
+### Adding a model
+
+Define a `ModelSpec` in the `MODELS` list in `app.py`:
+
+```python
+ModelSpec(
+    id="mlx-community/some-model",   # HuggingFace repo
+    label="Name  ·  style",          # Dropdown label
+    voices=[("name  ·  accent", "id"), ...],  # [] if no named voices
+    default_voice="id",
+    chunk_chars=None,    # None = sentence split, 0 = no split, N = fixed chars
+    hint="",             # Shown in UI hint box
+    eager=False,         # True = load at startup
+    use_speed=True,      # False if model has no speed param
+    default_speed=1.0,
+    preprocess_text=False,
+    generate_kwargs={},  # Extra kwargs passed to model.generate()
+)
+```
 
 ---
 
 ## Voices
 
-28 voices across four accents:
+### Kokoro (28 voices)
 
-| Code prefix | Accent |
+| Prefix | Accent |
 |---|---|
 | `af_` | American Female |
 | `am_` | American Male |
 | `bf_` | British Female |
 | `bm_` | British Male |
 
-Recommended starting voices: `af_heart` (warm, default), `bf_emma` (British female), `am_michael` (American male).
+Recommended: `af_heart` (default), `bf_emma`, `am_michael`.
 
-Full list: `./speak --list-voices`
+### Orpheus (8 voices)
+
+`tara` (default), `leah`, `jess`, `mia`, `zoe`, `leo`, `dan`, `zac`
+
+Supports emotion tags anywhere in text: `<laugh>` `<chuckle>` `<sigh>` `<gasp>` `<cough>` `<cries>`
 
 ---
 
@@ -118,14 +149,15 @@ Full list: `./speak --list-voices`
 
 ```
 .
-├── app.py                      # Gradio UI — MLX/Mac version
-├── speak.py                    # CLI — MLX/Mac version
-├── speak                       # Shell wrapper for speak.py
+├── app.py                      # Gradio UI + model registry
+├── speak.py                    # Core TTS logic + chunking
+├── speak                       # CLI shell wrapper
 ├── com.dermotburke.tts.plist   # macOS LaunchAgent
-├── requirements.txt            # Pinned Mac deps
-└── server/
-    ├── app.py                  # Gradio UI — PyTorch/Docker version
-    ├── Dockerfile
-    ├── docker-compose.yml
-    └── requirements.txt
+├── requirements.txt
+├── CLAUDE.md                   # AI contributor guidelines
+├── Makefile                    # make test / make install-hooks
+├── scripts/
+│   └── pre-push                # Git hook — runs tests before push
+└── tests/
+    └── test_e2e.py             # Playwright end-to-end tests
 ```
