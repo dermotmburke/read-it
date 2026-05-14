@@ -8,7 +8,7 @@ from mlx_audio.tts.generate import generate_audio
 from mlx_audio.tts.utils import load_model
 
 DEFAULT_MODEL = "mlx-community/Kokoro-82M-bf16"
-DEFAULT_VOICE = "af_heart"
+DEFAULT_VOICE = "am_adam"
 MAX_CHUNK_CHARS = 600
 
 VOICES = {

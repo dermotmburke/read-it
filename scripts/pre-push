@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Runs end-to-end tests before every push.
+# Install with: make install-hooks
+
+set -e
+
+VENV="$(git rev-parse --show-toplevel)/.venv/bin"
+
+echo "▶ pre-push: running e2e tests (service must be running on localhost:7860)..."
+
+if ! curl -sf http://localhost:7860 > /dev/null 2>&1; then
+    echo "✗ Service not reachable at localhost:7860 — start it before pushing"
+    exit 1
+fi
+
+"$VENV/pytest" tests/test_e2e.py -v --tb=short
+echo "✓ All tests passed"
