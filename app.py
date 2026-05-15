@@ -227,6 +227,7 @@ def update_voices(model_id):
 # ── Design: Sonic Brutalism ───────────────────────────────────────────────────
 
 _HEAD = """
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23000'/><rect x='10' y='10' width='26' height='80' fill='%23fff'/><rect x='10' y='10' width='80' height='23' fill='%23fff'/><rect x='64' y='10' width='26' height='37' fill='%23fff'/><rect x='10' y='47' width='54' height='23' fill='%23fff'/><rect x='56' y='70' width='34' height='20' fill='%23fff'/></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700;900&display=swap" rel="stylesheet">
 <script>
