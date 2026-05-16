@@ -3,6 +3,7 @@
 Requires the service to be running on localhost:7860.
 Run with: pytest tests/test_e2e.py -v
 """
+import requests
 import pytest
 from playwright.sync_api import sync_playwright, Page
 
@@ -108,3 +109,40 @@ class TestKokoroVoice:
         state = _dom_state(page)
         assert state["errorBox"] == "", "No errors for alternate voice"
         assert state["pauseBtnVisible"], "Audio should play for alternate voice"
+
+
+class TestAPI:
+    """Verify the REST API endpoint at POST /api/tts."""
+
+    API_URL = f"{BASE_URL}/api/tts"
+
+    def test_returns_mp3(self):
+        resp = requests.post(self.API_URL, json={"text": "Hello from the API."}, timeout=120)
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text[:200]}"
+        assert resp.headers["content-type"] == "audio/mpeg"
+        assert len(resp.content) > 1000, "MP3 response body is suspiciously small"
+
+    def test_custom_voice(self):
+        resp = requests.post(
+            self.API_URL,
+            json={"text": "Testing a custom voice.", "voice": "af_heart"},
+            timeout=120,
+        )
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "audio/mpeg"
+
+    def test_invalid_voice_returns_400(self):
+        resp = requests.post(
+            self.API_URL,
+            json={"text": "Hello.", "voice": "nonexistent_voice"},
+            timeout=10,
+        )
+        assert resp.status_code == 400
+
+    def test_empty_text_returns_400(self):
+        resp = requests.post(self.API_URL, json={"text": ""}, timeout=10)
+        assert resp.status_code == 400
+
+    def test_speed_out_of_range_returns_400(self):
+        resp = requests.post(self.API_URL, json={"text": "Hello.", "speed": 5.0}, timeout=10)
+        assert resp.status_code == 400

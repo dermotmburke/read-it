@@ -1,0 +1,135 @@
+openapi: "3.0.3"
+
+info:
+  title: read-it TTS API
+  version: "1.0.0"
+  description: |
+    REST endpoint for the read-it local TTS service.
+    Converts text to an MP3 file using the Kokoro-82M model running on Apple Silicon via MLX.
+
+    **Interactive docs:** `http://localhost:7860/api/docs`
+
+servers:
+  - url: http://localhost:7860
+    description: Local service
+
+paths:
+  /api/tts:
+    post:
+      summary: Synthesize text to MP3
+      description: |
+        Submit text and receive a 192 kbps MP3 audio file.
+        Long text is automatically split at sentence boundaries and merged into a single file.
+      operationId: tts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TTSRequest"
+            examples:
+              minimal:
+                summary: Text only (defaults)
+                value:
+                  text: "Hello, world."
+              with_voice:
+                summary: Custom voice and speed
+                value:
+                  text: "The quick brown fox jumps over the lazy dog."
+                  voice: "af_heart"
+                  speed: 1.1
+      responses:
+        "200":
+          description: MP3 audio file
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+                example: 'attachment; filename="speech.mp3"'
+          content:
+            audio/mpeg:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                empty_text:
+                  value: { "detail": "text must not be empty" }
+                bad_voice:
+                  value: { "detail": "Unknown voice 'xyz'. Valid voices: [...]" }
+                bad_speed:
+                  value: { "detail": "speed must be between 0.5 and 2.0" }
+        "500":
+          description: Inference error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  schemas:
+    TTSRequest:
+      type: object
+      required:
+        - text
+      properties:
+        text:
+          type: string
+          description: Text to synthesize. Any length; long inputs are chunked automatically.
+          example: "Hello, world."
+        voice:
+          type: string
+          description: Kokoro voice ID. Defaults to `am_adam`.
+          default: am_adam
+          enum:
+            # American Female
+            - af_heart
+            - af_alloy
+            - af_aoede
+            - af_bella
+            - af_jessica
+            - af_kore
+            - af_nicole
+            - af_nova
+            - af_river
+            - af_sarah
+            - af_sky
+            # American Male
+            - am_adam
+            - am_echo
+            - am_eric
+            - am_fenrir
+            - am_liam
+            - am_michael
+            - am_onyx
+            - am_puck
+            - am_santa
+            # British Female
+            - bf_alice
+            - bf_emma
+            - bf_isabella
+            - bf_lily
+            # British Male
+            - bm_daniel
+            - bm_fable
+            - bm_george
+            - bm_lewis
+        speed:
+          type: number
+          format: float
+          description: Speech rate multiplier.
+          default: 0.9
+          minimum: 0.5
+          maximum: 2.0
+          example: 1.0
+
+    Error:
+      type: object
+      properties:
+        detail:
+          type: string

@@ -5,6 +5,7 @@ Architecture note: MLX requires all GPU ops to run on the main thread
 run in a thread pool, so we flip things: Gradio server runs in a
 background thread, main thread loops over inference tasks from a queue.
 """
+import asyncio
 import os
 import tempfile
 import traceback
@@ -13,8 +14,12 @@ import threading
 from dataclasses import dataclass, field
 import numpy as np
 import gradio as gr
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import Response as FastAPIResponse
+from pydantic import BaseModel
 from scipy.io.wavfile import write as wav_write
 from pydub import AudioSegment
+import uvicorn
 
 from mlx_audio.tts.utils import load_model
 from speak import split_into_chunks, VOICES, DEFAULT_VOICE
@@ -99,6 +104,8 @@ MODELS: list[ModelSpec] = [
 MODEL_OPTIONS = [(spec.label, spec.id) for spec in MODELS]
 
 _model_cache: dict = {}
+_KOKORO_SPEC = MODELS[0]
+_VALID_VOICE_IDS: set[str] = {v for _, v in _KOKORO_SPEC.voices}
 
 
 def _spec_by_id(model_id: str) -> ModelSpec:
@@ -222,6 +229,92 @@ def update_voices(model_id):
     hint_update = gr.update(value=spec.hint, visible=bool(spec.hint))
     speed_update = gr.update(visible=spec.use_speed, value=spec.default_speed)
     return voice_update, hint_update, speed_update
+
+
+# ── REST API ─────────────────────────────────────────────────────────────────
+
+def _api_tts_sync(text: str, voice: str, speed: float) -> bytes:
+    """Blocking TTS call; intended to be run in a thread pool via asyncio.to_thread."""
+    spec = _KOKORO_SPEC
+    text = text.strip()
+    text = (
+        text.replace("—", " - ").replace("–", " - ")
+            .replace("‘", "'").replace("’", "'")
+            .replace("“", '"').replace("”", '"')
+    )
+    chunks = split_into_chunks(text)
+
+    def _infer():
+        mdl = _get_model(spec)
+        parts = []
+        for chunk in chunks:
+            kwargs = {"text": chunk, "voice": voice, "speed": speed, **spec.generate_kwargs}
+            for result in mdl.generate(**kwargs):
+                parts.append(np.array(result.audio).flatten())
+        return parts, mdl.sample_rate
+
+    audio_parts, sample_rate = _run_on_main_thread(_infer)
+    if not audio_parts:
+        raise RuntimeError("Model returned no audio")
+
+    audio = np.clip(np.concatenate(audio_parts), -1.0, 1.0)
+    pcm = (audio * 32767).astype(np.int16)
+
+    tmp_fd, tmp_wav = tempfile.mkstemp(suffix=".wav")
+    os.close(tmp_fd)
+    tmp_fd, tmp_mp3 = tempfile.mkstemp(suffix=".mp3")
+    os.close(tmp_fd)
+    try:
+        wav_write(tmp_wav, sample_rate, pcm)
+        AudioSegment.from_wav(tmp_wav).export(tmp_mp3, format="mp3", bitrate="192k")
+        with open(tmp_mp3, "rb") as f:
+            return f.read()
+    finally:
+        for p in (tmp_wav, tmp_mp3):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+
+
+_api = FastAPI(title="read-it TTS", version="1.0.0", docs_url="/api/docs", redoc_url=None)
+
+
+class _TTSRequest(BaseModel):
+    text: str
+    voice: str = _KOKORO_SPEC.default_voice
+    speed: float = _KOKORO_SPEC.default_speed
+
+
+@_api.post(
+    "/api/tts",
+    response_class=FastAPIResponse,
+    summary="Synthesize text to MP3 (Kokoro)",
+    responses={
+        200: {"content": {"audio/mpeg": {}}, "description": "MP3 audio stream"},
+        400: {"description": "Invalid request parameters"},
+        500: {"description": "Inference error"},
+    },
+)
+async def api_tts(req: _TTSRequest) -> FastAPIResponse:
+    if not req.text.strip():
+        raise HTTPException(status_code=400, detail="text must not be empty")
+    if req.voice not in _VALID_VOICE_IDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown voice {req.voice!r}. Valid voices: {sorted(_VALID_VOICE_IDS)}",
+        )
+    if not 0.5 <= req.speed <= 2.0:
+        raise HTTPException(status_code=400, detail="speed must be between 0.5 and 2.0")
+    try:
+        mp3 = await asyncio.to_thread(_api_tts_sync, req.text, req.voice, req.speed)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return FastAPIResponse(
+        content=mp3,
+        media_type="audio/mpeg",
+        headers={"Content-Disposition": 'attachment; filename="speech.mp3"'},
+    )
 
 
 # ── Design: Sonic Brutalism ───────────────────────────────────────────────────
@@ -699,21 +792,22 @@ with gr.Blocks(title="read-it") as demo:
         [audio_out, error_out, status_out, dl_btn],
     )
 
+# Apply CSS/head/theme so they're picked up by mount_gradio_app's app builder.
+demo.css = _CSS
+demo.head = _HEAD
+demo.theme = gr.themes.Base()
+
+_app = gr.mount_gradio_app(_api, demo, path="/")
+
 
 # ── Entry point ──────────────────────────────────────────────────────────────
 
-def _run_gradio():
-    demo.launch(
-        server_name="0.0.0.0",
-        prevent_thread_lock=True,
-        css=_CSS,
-        head=_HEAD,
-        theme=gr.themes.Base(),
-    )
+def _run_server():
+    uvicorn.run(_app, host="0.0.0.0", port=7860, log_level="warning")
 
 
 if __name__ == "__main__":
-    t = threading.Thread(target=_run_gradio, daemon=True)
+    t = threading.Thread(target=_run_server, daemon=True)
     t.start()
 
     print("Server running — main thread handling MLX inference")
